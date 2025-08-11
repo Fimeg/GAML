@@ -1,0 +1,26 @@
+# Build artifacts
+gaml_poc
+*.o
+*.exe
+
+# CUDA compilation
+*.fatbin
+*.cubin
+*.ptx
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project state
+project_state.md
+
+# Temporary files
+*.tmp
+*.log
