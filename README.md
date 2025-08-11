@@ -20,19 +20,25 @@ Current GGUF loaders (Ollama, llama.cpp) are **CPU-bound disasters**:
 - 5-20x speedup vs CPU-only loading
 - Bit-perfect accuracy guarantee
 
-## 🏗️ Current Status: Proof of Concept
+## 🏗️ Current Status: Complete Pipeline (v0.2)
 
-**Phase 1 Complete**: Q4_K Dequantization Kernel
+**Phase 1 Complete**: Q4_K Dequantization Kernel ✅
 - ✅ CUDA kernel for Q4_K quantized weights
 - ✅ Parallel processing across GPU cores  
 - ✅ Performance benchmarking vs CPU
 - ✅ Accuracy verification
 
+**Phase 2 Complete**: Full Loading Pipeline ✅
+- ✅ GGUF file format parser
+- ✅ Chunked loading system (2GB buffers)
+- ✅ GPU memory management
+- ✅ Production CLI tool (`gaml`)
+
 **Next Phases**:
-- 🔄 GGUF file reader integration
-- 🔄 Chunked loading pipeline
 - 🔄 Multi-format support (Q8_0, F16)
-- 🔄 Production CLI tool
+- 🔄 Advanced optimizations
+- 🔄 Cross-platform GPU support
+- 🔄 Integration with existing tools
 
 ## 🔧 Quick Start
 
@@ -46,11 +52,27 @@ sudo apt install nvidia-cuda-toolkit  # Ubuntu/Debian
 
 ### Build & Run
 ```bash
-git clone <this-repo>
+git clone https://github.com/Fimeg/GAML.git
 cd GAML
 make check-cuda    # Verify CUDA installation
-make              # Compile proof of concept
-make test         # Run benchmark
+make              # Build complete GAML tool
+make test-gpu     # Check GPU compatibility
+./gaml --help     # See usage options
+```
+
+### Process a Model
+```bash
+# Basic usage
+./gaml model.gguf
+
+# Save processed tensors
+./gaml model.gguf output/
+
+# Custom chunk size
+./gaml -c 1GB model.gguf
+
+# Run benchmark
+./gaml --benchmark
 ```
 
 ### Expected Output
@@ -129,20 +151,22 @@ Q4_K uses complex "super-block" quantization:
 - Performance benchmarking
 - Accuracy verification
 
-### v0.2 - GGUF Integration 🔄
-- File format parser
-- Chunked loading pipeline  
+### v0.2 - Complete Pipeline ✅
+- GGUF file format parser
+- Chunked loading system
 - Memory management
+- CLI tool (`gaml`)
 
 ### v0.3 - Multi-Format 🔄
 - Q8_0 quantization support
 - F16 half-precision support
 - Auto-format detection
+- Performance optimizations
 
 ### v1.0 - Production Ready 🎯
-- CLI tool: `gaml load model.gguf`
-- Ollama integration
-- Cross-platform support
+- Ollama/llama.cpp integration
+- Cross-platform GPU support
+- Advanced memory management
 - Error handling & fallbacks
 
 ## 🤝 Contributing
