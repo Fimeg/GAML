@@ -39,6 +39,8 @@ public:
     // Core loading functionality
     bool load_model(const std::string& gguf_file, const std::string& output_file = "");
     bool process_tensor(size_t tensor_index, const std::string& output_file = "");
+    bool process_tensor(size_t tensor_index, const std::string& output_file, 
+                       size_t buffer_chunk_size, size_t max_output_chunk);
     
     // GPU processing
     bool process_q4k_chunk(const void* input_chunk, size_t input_size, 
@@ -95,6 +97,13 @@ private:
     
     // File handling
     std::unique_ptr<GGUFReader> reader;
+    
+    // Triple-buffer async pipeline resources
+    std::vector<void*> host_pinned_buffers;
+    std::vector<void*> device_input_buffers;
+    std::vector<void*> device_output_buffers;
+    std::vector<cudaStream_t> buffer_streams;
+    std::vector<cudaEvent_t> buffer_done_events;
     
     // State
     std::string last_error;
