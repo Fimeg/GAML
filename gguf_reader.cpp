@@ -436,6 +436,29 @@ size_t GGUFReader::get_type_size(uint32_t type) const {
     }
 }
 
+int64_t GGUFReader::get_metadata_int(const std::string& key) const {
+    auto it = metadata_map.find(key);
+    if (it == metadata_map.end()) {
+        return -1;  // Key not found
+    }
+    
+    const gguf_kv& kv = metadata[it->second];
+    if (kv.value.empty()) return -1;
+    
+    switch (kv.type) {
+        case GGUF_TYPE_UINT32:
+            return *reinterpret_cast<const uint32_t*>(kv.value.data());
+        case GGUF_TYPE_INT32:
+            return *reinterpret_cast<const int32_t*>(kv.value.data());
+        case GGUF_TYPE_UINT64:
+            return *reinterpret_cast<const uint64_t*>(kv.value.data());
+        case GGUF_TYPE_INT64:
+            return *reinterpret_cast<const int64_t*>(kv.value.data());
+        default:
+            return -1;  // Wrong type
+    }
+}
+
 void GGUFReader::set_error(const std::string& error) {
     last_error = error;
     std::cerr << "GGUF Error: " << error << std::endl;
