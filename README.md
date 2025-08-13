@@ -4,7 +4,8 @@
 
 GAML accelerates GGUF model loading using GPU parallel processing instead of slow CPU sequential operations. Load 70B models in **5-8 minutes** instead of 40+ minutes.
 
-**Fund Development!** <a href="https://www.buymeacoffee.com/caseytunturi" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-violet.png" alt="Buy Me A Coffee" height="60px" width="200px"></a>
+**Fund Development!** 
+<a href="https://www.buymeacoffee.com/caseytunturi" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-violet.png" alt="Buy Me A Coffee" height="60px" width="200px"></a>
 
 ## 🎯 The Problem
 
