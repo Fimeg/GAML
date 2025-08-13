@@ -287,8 +287,7 @@ bool GPULoader::process_tensor(size_t tensor_index, const std::string& output_fi
 
     // Only process Q4_K tensors in this version
     if (tensor.type != GGML_TYPE_Q4_K) {
-        std::cout << "Skipping non-Q4_K tensor: " << tensor.name
-        << " (type: " << ggml_type_name(tensor.type) << ")" << std::endl;
+        std::cout << "Skipping non-Q4_K tensor: " << tensor.name << " (type ID: " << tensor.type << ")" << std::endl;
         return true;
     }
 
