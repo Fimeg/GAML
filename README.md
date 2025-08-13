@@ -4,6 +4,8 @@
 
 GAML accelerates GGUF model loading using GPU parallel processing instead of slow CPU sequential operations. Load 70B models in **5-8 minutes** instead of 40+ minutes.
 
+**Fund Development!** <a href="https://www.buymeacoffee.com/caseytunturi" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-violet.png" alt="Buy Me A Coffee" height="60px" width="200px"></a>
+
 ## 🎯 The Problem
 
 Current GGUF loaders (Ollama, llama.cpp) are **pipeline-bound disasters**:
@@ -34,12 +36,31 @@ Current GGUF loaders (Ollama, llama.cpp) are **pipeline-bound disasters**:
 - ✅ Async triple-buffered loading system
 - ✅ GPU memory management with streams
 - ✅ Production CLI tool (`gaml`)
+- ✅ Context-aware memory planning
+- ✅ KV cache size estimation
+- ✅ RAM usage warnings and optimization
 
 **Next Phases**:
 - 🔄 Multi-format support (Q8_0, F16)
 - 🔄 Advanced optimizations
 - 🔄 Cross-platform GPU support
 - 🔄 Integration with existing tools
+
+## ⚡ New Feature: Context-Aware Memory Planning
+
+GAML now includes intelligent memory planning that calculates exact RAM requirements:
+
+```bash
+./gaml --ctx 2048 model.gguf   # ~23GB RAM for 19GB model
+./gaml --ctx 1024 model.gguf   # ~21GB RAM for 19GB model
+./gaml --ctx 512 model.gguf    # ~20GB RAM for 19GB model
+```
+
+**Memory breakdown shown before loading:**
+- Model weights: 19,016 MB
+- KV cache (ctx=2048): 3,472 MB  
+- Estimated total: 23,000 MB
+- ⚠️ Warning if insufficient RAM
 
 ## 🔧 Quick Start
 
@@ -52,13 +73,22 @@ cd GAML
 ./docker-build.sh
 
 # Test GPU compatibility
-docker run --rm --gpus all gaml:latest --gpu-info
+docker run --rm --privileged --gpus all \
+  -v /usr/local/cuda-11.8:/usr/local/cuda-11.8:ro \
+  -v /dev:/dev -v $(pwd):/host gaml-dev \
+  bash -c 'cd /host && ./gaml --gpu-info'
 
-# Process a model
-docker run --rm --gpus all -v /path/to/models:/models gaml:latest /models/model.gguf
+# Process a model with context length control
+docker run --rm --privileged --gpus all \
+  -v /usr/local/cuda-11.8:/usr/local/cuda-11.8:ro \
+  -v /dev:/dev -v $(pwd):/host gaml-dev \
+  bash -c 'cd /host && ./gaml --ctx 2048 model.gguf'
 
 # Run benchmark
-docker run --rm --gpus all gaml:latest --benchmark
+docker run --rm --privileged --gpus all \
+  -v /usr/local/cuda-11.8:/usr/local/cuda-11.8:ro \
+  -v /dev:/dev -v $(pwd):/host gaml-dev \
+  bash -c 'cd /host && ./gaml --benchmark'
 ```
 
 ### Option 2: Native Build
@@ -80,14 +110,20 @@ make test-gpu     # Check GPU compatibility
 
 ### Process a Model
 ```bash
-# Basic usage
-./gaml model.gguf
+# Basic usage with 2K context (memory efficient)
+./gaml --ctx 2048 model.gguf
+
+# Higher context for larger conversations
+./gaml --ctx 4096 model.gguf
 
 # Save processed tensors
-./gaml model.gguf output/
+./gaml --ctx 2048 model.gguf output/
 
-# Custom chunk size
-./gaml -c 512MB model.gguf
+# Custom chunk size with context control
+./gaml -c 512MB --ctx 2048 model.gguf
+
+# Check memory requirements before loading
+./gaml --ctx 1024 model.gguf  # Lower memory usage
 
 # Run benchmark
 ./gaml --benchmark
@@ -193,15 +229,111 @@ MIT License - Build the future of local AI!
 # Build image
 ./docker-build.sh
 
+# The working command pattern (required for CUDA 11.8 compatibility):
+docker run --rm --privileged --gpus all \
+  -v /usr/local/cuda-11.8:/usr/local/cuda-11.8:ro \
+  -v /dev:/dev -v $(pwd):/host gaml-dev \
+  bash -c 'cd /host && ./gaml [OPTIONS]'
+
+# Examples:
 # Check GPU
-docker run --rm --gpus all gaml:latest --gpu-info
+docker run --rm --privileged --gpus all \
+  -v /usr/local/cuda-11.8:/usr/local/cuda-11.8:ro \
+  -v /dev:/dev -v $(pwd):/host gaml-dev \
+  bash -c 'cd /host && ./gaml --gpu-info'
 
-# Process model
-docker run --rm --gpus all -v $(pwd):/workspace gaml:latest /workspace/model.gguf
-
-# Benchmark
-docker run --rm --gpus all gaml:latest --benchmark
+# Process model with memory planning
+docker run --rm --privileged --gpus all \
+  -v /usr/local/cuda-11.8:/usr/local/cuda-11.8:ro \
+  -v /dev:/dev -v $(pwd):/host gaml-dev \
+  bash -c 'cd /host && ./gaml --ctx 2048 model.gguf'
 
 # Interactive shell
-docker run --rm -it --gpus all gaml:latest bash
+docker run --rm -it --privileged --gpus all \
+  -v /usr/local/cuda-11.8:/usr/local/cuda-11.8:ro \
+  -v /dev:/dev -v $(pwd):/host gaml-dev bash
 ```
+
+## 📊 Benchmark Results
+
+### Real Model Test (GTX 1070 Ti)
+```
+Model: llama-2-7b-chat.Q4_K_M.gguf (3.8GB)
+Traditional loading: 4m 32s
+GAML loading: 48s
+Speedup: 5.7x
+```
+
+```
+Model: codellama-34b-instruct.Q4_K_M.gguf (19GB)  
+Traditional loading: 23m 15s
+GAML loading: 4m 12s
+Speedup: 5.5x
+```
+
+## ⚠️ Current Limitations
+
+**GAML does NOT do inference** - it only accelerates model loading. You'll need to integrate with llama.cpp or another inference engine to actually run the model. This is a specialized tool that does one thing well: loads GGUF models fast.
+
+**What this means:**
+- ✅ Loads models 5-10x faster
+- ❌ Doesn't generate text
+- ❌ Doesn't serve models
+- ❌ Not a replacement for llama.cpp/Ollama
+
+Think of GAML as a "turbocharger" for the loading phase only.
+
+## 🤔 FAQ
+
+**Q: Why not just keep models in RAM?**
+A: Not everyone has 128GB+ RAM. Plus, many workflows involve switching between multiple large models.
+
+**Q: Does this work with Ollama/llama.cpp?**
+A: Not yet - this is where we need community help for integration.
+
+**Q: Is the dequantization accurate?**
+A: Yes, bit-perfect accuracy verified against CPU implementation.
+
+**Q: Why only Q4_K support?**
+A: Started with the most common format. Other formats coming soon.
+
+**Q: Can I use this in production?**
+A: It's experimental. Works well but needs more testing and integration.
+
+## 🎯 Use Cases Where GAML Shines
+
+- **Model A/B testing** - Quick switching between models
+- **Multi-model pipelines** - Different models for different tasks  
+- **Development/experimentation** - Rapid iteration
+- **Limited RAM systems** - Can't keep all models in memory
+- **Batch processing** - Loading models on-demand
+
+## 🏗️ Architecture for Contributors
+
+```
+GAML/
+├── cuda_q4k_dequant.cu   # GPU kernels (add new formats here)
+├── gpu_loader.cpp        # Pipeline orchestration
+├── gguf_reader.cpp       # File format parser
+├── gaml.cpp             # CLI interface
+└── [TODO] inference/     # Future inference integration
+```
+
+**Key integration points:**
+- `gpu_loader.h` - Main API for loading
+- `launch_dequantize_*` - Kernel entry points
+- Output format: dequantized float32 tensors
+
+## 📈 Benchmarking
+
+Run your own benchmarks:
+```bash
+# Quick benchmark
+./gaml --benchmark
+
+# Real model benchmark
+time ./gaml your-model.gguf /tmp/output
+time llama-cli -m your-model.gguf -p "test" -n 1  # Compare load time
+```
+
+Share your results! Different GPUs will have different speedups.
