@@ -1,11 +1,11 @@
 // GPU-Accelerated GGUF Loading - Q4_K Dequantization Kernel
 // Proof of Concept: Process Q4_K quantized weights on GPU instead of CPU
 
-#include <cuda_runtime.h>
-#include <cuda_fp16.h>
 #include <stdio.h>
 #include <assert.h>
 #include <chrono>
+#include <cuda_runtime.h>
+#include <cuda_fp16.h>
 
 // Q4_K block structure (from ggml)
 #define QK_K 256
@@ -127,17 +127,48 @@ void benchmark_dequantization() {
     // Allocate GPU memory
     block_q4_k* d_input;
     float* d_output;
-    cudaMalloc(&d_input, input_size);
-    cudaMalloc(&d_output, output_size);
+    cudaError_t err;
+    
+    err = cudaMalloc(&d_input, input_size);
+    if (err != cudaSuccess) {
+        printf("CUDA Error allocating input memory: %s\n", cudaGetErrorString(err));
+        return;
+    }
+    
+    err = cudaMalloc(&d_output, output_size);
+    if (err != cudaSuccess) {
+        printf("CUDA Error allocating output memory: %s\n", cudaGetErrorString(err));
+        cudaFree(d_input);
+        return;
+    }
     
     // Copy input to GPU
-    cudaMemcpy(d_input, h_input, input_size, cudaMemcpyHostToDevice);
+    err = cudaMemcpy(d_input, h_input, input_size, cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        printf("CUDA Error copying to device: %s\n", cudaGetErrorString(err));
+        cudaFree(d_input);
+        cudaFree(d_output);
+        return;
+    }
     
     // Warm up GPU
     dim3 block(32);
     dim3 grid((test_blocks + block.x - 1) / block.x);
     dequantize_q4k_kernel<<<grid, block>>>(d_input, d_output, test_blocks);
-    cudaDeviceSynchronize();
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("CUDA Error launching warmup kernel: %s\n", cudaGetErrorString(err));
+        cudaFree(d_input);
+        cudaFree(d_output);
+        return;
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        printf("CUDA Error synchronizing warmup: %s\n", cudaGetErrorString(err));
+        cudaFree(d_input);
+        cudaFree(d_output);
+        return;
+    }
     
     // Benchmark CPU implementation
     printf("\n--- CPU Benchmark ---\n");
@@ -153,7 +184,20 @@ void benchmark_dequantization() {
     printf("\n--- GPU Benchmark ---\n");
     auto gpu_start = std::chrono::high_resolution_clock::now();
     dequantize_q4k_kernel<<<grid, block>>>(d_input, d_output, test_blocks);
-    cudaDeviceSynchronize();
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("CUDA Error launching GPU benchmark kernel: %s\n", cudaGetErrorString(err));
+        cudaFree(d_input);
+        cudaFree(d_output);
+        return;
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        printf("CUDA Error synchronizing GPU benchmark: %s\n", cudaGetErrorString(err));
+        cudaFree(d_input);
+        cudaFree(d_output);
+        return;
+    }
     auto gpu_end = std::chrono::high_resolution_clock::now();
     auto gpu_time = std::chrono::duration_cast<std::chrono::milliseconds>(gpu_end - gpu_start);
     
@@ -212,10 +256,16 @@ extern "C" {
     }
 }
 
+// Commented out standalone main - conflicts with gaml.cpp main
+/*
 int main() {
     // Check GPU availability
     int device_count;
-    cudaGetDeviceCount(&device_count);
+    cudaError_t err = cudaGetDeviceCount(&device_count);
+    if (err != cudaSuccess) {
+        printf("CUDA Error getting device count: %s\n", cudaGetErrorString(err));
+        return 1;
+    }
     
     if (device_count == 0) {
         printf("No CUDA devices found!\n");
@@ -224,11 +274,15 @@ int main() {
     
     // Print GPU info
     cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, 0);
+    err = cudaGetDeviceProperties(&prop, 0);
+    if (err != cudaSuccess) {
+        printf("CUDA Error getting device properties: %s\n", cudaGetErrorString(err));
+        return 1;
+    }
     printf("Using GPU: %s\n", prop.name);
     printf("CUDA Cores: %d\n", prop.multiProcessorCount * 128); // Rough estimate
     printf("Memory: %.1f GB\n", prop.totalGlobalMem / 1024.0 / 1024.0 / 1024.0);
-    printf("Memory Bandwidth: %.1f GB/s\n", 2.0 * prop.memoryClockRate * (prop.memoryBusWidth / 8) / 1.0e6);
+    printf("Memory Bus Width: %d bits\n", prop.memoryBusWidth);
     
     // Run the benchmark
     benchmark_dequantization();
@@ -242,6 +296,7 @@ int main() {
     
     return 0;
 }
+*/
 
 /* 
 Compilation instructions:

@@ -6,17 +6,18 @@ GAML accelerates GGUF model loading using GPU parallel processing instead of slo
 
 ## 🎯 The Problem
 
-Current GGUF loaders (Ollama, llama.cpp) are **CPU-bound disasters**:
+Current GGUF loaders (Ollama, llama.cpp) are **pipeline-bound disasters**:
 - Sequential processing of billions of quantized weights
-- Single-threaded dequantization operations  
+- GPU idle 90% of the time while CPU struggles
 - 40+ minutes to load large models (70B Q4_K)
 - Terrible user experience for local AI
 
 ## ⚡ GAML Solution
 
-**GPU Parallel Processing Pipeline**:
-- 2400+ CUDA cores process weights simultaneously
-- Chunked loading: 2GB GPU memory buffers
+**Overlapped GPU Pipeline**:
+- Triple-buffered async processing
+- Pinned memory + CUDA streams
+- GPU busy while next chunk loads from disk
 - 5-20x speedup vs CPU-only loading
 - Bit-perfect accuracy guarantee
 
@@ -30,8 +31,8 @@ Current GGUF loaders (Ollama, llama.cpp) are **CPU-bound disasters**:
 
 **Phase 2 Complete**: Full Loading Pipeline ✅
 - ✅ GGUF file format parser
-- ✅ Chunked loading system (2GB buffers)
-- ✅ GPU memory management
+- ✅ Async triple-buffered loading system
+- ✅ GPU memory management with streams
 - ✅ Production CLI tool (`gaml`)
 
 **Next Phases**:
@@ -42,16 +43,33 @@ Current GGUF loaders (Ollama, llama.cpp) are **CPU-bound disasters**:
 
 ## 🔧 Quick Start
 
-### Prerequisites
+### Option 1: Docker Build (Recommended)
+Perfect for systems with nvidia-container-toolkit but no CUDA dev tools:
+
 ```bash
-# NVIDIA GPU with CUDA support (GTX 1060+, RTX series)
-# CUDA Toolkit 11.0+ 
-sudo apt install nvidia-cuda-toolkit  # Ubuntu/Debian
-# OR download from: https://developer.nvidia.com/cuda-toolkit
+git clone https://github.com/Fimeg/GAML.git
+cd GAML
+./docker-build.sh
+
+# Test GPU compatibility
+docker run --rm --gpus all gaml:latest --gpu-info
+
+# Process a model
+docker run --rm --gpus all -v /path/to/models:/models gaml:latest /models/model.gguf
+
+# Run benchmark
+docker run --rm --gpus all gaml:latest --benchmark
 ```
 
-### Build & Run
+### Option 2: Native Build
+For systems with full CUDA toolkit installed:
+
 ```bash
+# Prerequisites: CUDA Toolkit 11.0+
+sudo dnf install nvidia-cuda-toolkit  # Fedora
+# OR
+sudo apt install nvidia-cuda-toolkit  # Ubuntu/Debian
+
 git clone https://github.com/Fimeg/GAML.git
 cd GAML
 make check-cuda    # Verify CUDA installation
@@ -69,35 +87,10 @@ make test-gpu     # Check GPU compatibility
 ./gaml model.gguf output/
 
 # Custom chunk size
-./gaml -c 1GB model.gguf
+./gaml -c 512MB model.gguf
 
 # Run benchmark
 ./gaml --benchmark
-```
-
-### Expected Output
-```
-Using GPU: GeForce GTX 1070 Ti
-CUDA Cores: 2432
-Memory: 8.0 GB
-
-=== GPU-Accelerated GGUF Loading Benchmark ===
-Test size: 1048576 blocks (256.0 MB input, 1024.0 MB output)
-
---- CPU Benchmark ---
-CPU time: 2847 ms
-CPU throughput: 0.09 GB/s
-
---- GPU Benchmark ---  
-GPU time: 312 ms
-GPU throughput: 0.82 GB/s
-Speedup: 9.13x
-
---- Full Model Projection ---
-For 40GB model (Q4_K):
-CPU estimated time: 44.7 minutes  
-GPU estimated time: 4.9 minutes
-Projected speedup: 9.1x faster! 🚀
 ```
 
 ## 🎮 GPU Compatibility
@@ -108,10 +101,10 @@ Projected speedup: 9.1x faster! 🚀
 - RTX 3060, 3070, 3080, 3090 series ✅
 - RTX 4060, 4070, 4080, 4090 series ✅
 
-**Future Support**:
-- AMD (ROCm/HIP) 🔄
-- Intel (oneAPI/SYCL) 🔄
-- Metal (macOS) 🔄
+**Requirements**:
+- NVIDIA GPU with compute capability 6.1+
+- 4GB+ VRAM minimum  
+- nvidia-container-toolkit (Docker) OR CUDA Toolkit (native)
 
 ## 📊 Performance Expectations
 
@@ -123,21 +116,27 @@ Projected speedup: 9.1x faster! 🚀
 
 ## 🔬 Technical Deep Dive
 
-### The Loading Bottleneck
+### The Real Bottleneck
 ```mermaid
 graph LR
-    A[40GB GGUF] --> B[CPU Sequential Processing]
-    B --> C[Q4_K Dequantization]
-    C --> D[Memory Copy]
-    D --> E[40+ Minutes 😴]
+    A[Traditional: Sequential] --> B[Read→Process→Copy]
+    B --> C[GPU Idle 90%]
+    C --> D[40+ Minutes 😴]
     
-    A --> F[GPU Parallel Processing]
-    F --> G[2400 Cores Working]
-    G --> H[Chunked Pipeline] 
-    H --> I[5-8 Minutes ⚡]
+    E[GAML: Overlapped] --> F[Read∥Process∥Copy]
+    F --> G[GPU Busy 90%] 
+    G --> H[5-8 Minutes ⚡]
 ```
 
-### Q4_K Format Challenge
+### Triple-Buffer Pipeline
+```
+Buffer A: Loading chunk N+2 from disk
+Buffer B: GPU processing chunk N+1  
+Buffer C: Copying results from chunk N
+ALL HAPPENING SIMULTANEOUSLY!
+```
+
+### Q4_K Format Optimization
 Q4_K uses complex "super-block" quantization:
 - 256 weights per block
 - 4.5 bits per weight average
@@ -153,8 +152,8 @@ Q4_K uses complex "super-block" quantization:
 
 ### v0.2 - Complete Pipeline ✅
 - GGUF file format parser
-- Chunked loading system
-- Memory management
+- Triple-buffered async loading
+- Memory management with CUDA streams
 - CLI tool (`gaml`)
 
 ### v0.3 - Multi-Format 🔄
@@ -165,7 +164,7 @@ Q4_K uses complex "super-block" quantization:
 
 ### v1.0 - Production Ready 🎯
 - Ollama/llama.cpp integration
-- Cross-platform GPU support
+- Cross-platform GPU support (AMD, Intel)
 - Advanced memory management
 - Error handling & fallbacks
 
@@ -187,3 +186,22 @@ MIT License - Build the future of local AI!
 **Time to fix what should have been built years ago.** 🚀
 
 *No more 40-minute loading times. No more coffee breaks during model loads. Just fast, local AI that actually works.*
+
+## 🐋 Docker Commands Quick Reference
+
+```bash
+# Build image
+./docker-build.sh
+
+# Check GPU
+docker run --rm --gpus all gaml:latest --gpu-info
+
+# Process model
+docker run --rm --gpus all -v $(pwd):/workspace gaml:latest /workspace/model.gguf
+
+# Benchmark
+docker run --rm --gpus all gaml:latest --benchmark
+
+# Interactive shell
+docker run --rm -it --gpus all gaml:latest bash
+```

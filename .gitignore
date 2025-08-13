@@ -24,3 +24,7 @@ project_state.md
 # Temporary files
 *.tmp
 *.log
+
+# Claude and cache directories
+.claude/
+.cache/

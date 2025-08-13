@@ -113,6 +113,7 @@ public:
 
 private:
     FILE* file;
+    int fd;  // Add file descriptor for direct I/O
     uint64_t file_size;
     size_t tensor_data_offset;
     

@@ -8,6 +8,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <cuda_runtime.h>
 
 // GPU memory management
 struct GPUBuffer {

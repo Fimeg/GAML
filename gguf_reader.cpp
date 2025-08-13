@@ -4,6 +4,9 @@
 #include <cstring>
 #include <iostream>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
 
 // Type size lookup table - using traditional array initialization instead of designated initializers
 static const size_t ggml_type_sizes[] = {
@@ -40,7 +43,7 @@ static const char* ggml_type_names[] = {
     "Q8_K"   // GGML_TYPE_Q8_K
 };
 
-GGUFReader::GGUFReader() : file(nullptr), file_size(0), tensor_data_offset(0) {
+GGUFReader::GGUFReader() : file(nullptr), fd(-1), file_size(0), tensor_data_offset(0) {
     memset(&header, 0, sizeof(header));
 }
 
@@ -51,15 +54,28 @@ GGUFReader::~GGUFReader() {
 bool GGUFReader::open(const std::string& filename) {
     close();
 
+    // Open with both FILE* and file descriptor for compatibility
     file = fopen(filename.c_str(), "rb");
     if (!file) {
         set_error("Failed to open file: " + filename);
         return false;
     }
 
+    // Also open with direct I/O for large reads
+    fd = ::open(filename.c_str(), O_RDONLY);
+    if (fd < 0) {
+        fclose(file);
+        file = nullptr;
+        set_error("Failed to open file descriptor: " + filename);
+        return false;
+    }
+
+    // Disable stdio buffering for large files
+    setvbuf(file, nullptr, _IONBF, 0);
+
     // Get file size
     struct stat st;
-    if (stat(filename.c_str(), &st) != 0) {
+    if (fstat(fd, &st) != 0) {
         set_error("Failed to get file size");
         close();
         return false;
@@ -71,6 +87,10 @@ bool GGUFReader::open(const std::string& filename) {
 }
 
 void GGUFReader::close() {
+    if (fd >= 0) {
+        ::close(fd);
+        fd = -1;
+    }
     if (file) {
         fclose(file);
         file = nullptr;
@@ -188,16 +208,28 @@ bool GGUFReader::read_tensor_info() {
             return false;
         }
 
-        // Calculate tensor size
+        // Calculate tensor size correctly for different quantization formats
         uint64_t element_count = 1;
         for (uint64_t dim : tensor.dimensions) {
             element_count *= dim;
         }
 
         if (tensor.type < GGML_TYPE_COUNT) {
-            tensor.size = element_count * ggml_type_sizes[tensor.type] / 256;  // Blocks of 256
-            if (tensor.type == GGML_TYPE_F32 || tensor.type == GGML_TYPE_F16) {
-                tensor.size = element_count * ggml_type_sizes[tensor.type];
+            // Handle different tensor types with correct size calculations
+            if (tensor.type == GGML_TYPE_F32) {
+                tensor.size = element_count * sizeof(float);
+            } else if (tensor.type == GGML_TYPE_F16) {
+                tensor.size = element_count * sizeof(uint16_t);
+            } else if (tensor.type == GGML_TYPE_Q4_K) {
+                // Q4_K uses super-blocks of 256 elements, each taking 144 bytes
+                uint64_t n_blocks = (element_count + 255) / 256;  // Round up
+                tensor.size = n_blocks * 144;
+            } else {
+                // For other quantized types, use block-based calculation
+                // Most quantized types use blocks of 32 elements
+                uint64_t block_size = (tensor.type >= GGML_TYPE_Q2_K) ? 256 : 32;
+                uint64_t n_blocks = (element_count + block_size - 1) / block_size;
+                tensor.size = n_blocks * ggml_type_sizes[tensor.type];
             }
         } else {
             set_error("Unknown tensor type: " + std::to_string(tensor.type));
@@ -230,32 +262,78 @@ bool GGUFReader::read_tensor_info() {
 }
 
 bool GGUFReader::read_tensor_chunk(size_t tensor_index, uint64_t offset, size_t chunk_size, void* buffer) {
-    if (!file || tensor_index >= tensors.size()) {
+    if (!file || fd < 0 || tensor_index >= tensors.size()) {
         set_error("Invalid tensor index or file not open");
         return false;
     }
 
     const auto& tensor = tensors[tensor_index];
-    uint64_t file_offset = tensor_data_offset + tensor.offset + offset;
+    
+    // CRITICAL FIX: Ensure tensor data offset is properly aligned per GGUF spec
+    uint64_t aligned_tensor_data_offset = (tensor_data_offset + 31) & ~31ULL;
+    uint64_t file_offset = aligned_tensor_data_offset + tensor.offset + offset;
 
-    // Bounds checking
+    // Bounds checking with better error reporting
     if (offset + chunk_size > tensor.size) {
-        set_error("Chunk extends beyond tensor bounds");
+        set_error("Chunk extends beyond tensor bounds: offset=" + std::to_string(offset) + 
+                 " chunk_size=" + std::to_string(chunk_size) + 
+                 " tensor.size=" + std::to_string(tensor.size));
         return false;
     }
 
-    if (fseek(file, file_offset, SEEK_SET) != 0) {
-        set_error("Failed to seek to tensor data");
+    // Validate file offset
+    if (file_offset + chunk_size > file_size) {
+        set_error("Read would exceed file size: file_offset=" + std::to_string(file_offset) + 
+                 " chunk_size=" + std::to_string(chunk_size) + 
+                 " file_size=" + std::to_string(file_size));
         return false;
     }
 
-    size_t bytes_read = fread(buffer, 1, chunk_size, file);
-    if (bytes_read != chunk_size) {
-        set_error("Failed to read tensor chunk");
-        return false;
+    // Use direct I/O for large reads (>1MB) to avoid stdio buffer issues
+    if (chunk_size > 1024 * 1024) {
+        // Direct system call read with retry logic
+        ssize_t total_read = 0;
+        while (total_read < (ssize_t)chunk_size) {
+            ssize_t bytes_read = pread(fd, 
+                                      (char*)buffer + total_read,
+                                      chunk_size - total_read,
+                                      file_offset + total_read);
+            
+            if (bytes_read <= 0) {
+                if (bytes_read == 0) {
+                    set_error("Unexpected EOF at offset " + std::to_string(file_offset + total_read));
+                } else {
+                    set_error("Read error: " + std::string(strerror(errno)));
+                }
+                return false;
+            }
+            total_read += bytes_read;
+        }
+        
+        std::cout << "Successfully read " << chunk_size / (1024*1024) << "MB using direct I/O" << std::endl;
+        return true;
+    } else {
+        // Use stdio for small reads (metadata, etc.)
+        if (fseek(file, file_offset, SEEK_SET) != 0) {
+            set_error("Failed to seek to tensor data at offset " + std::to_string(file_offset));
+            return false;
+        }
+        
+        size_t bytes_read = fread(buffer, 1, chunk_size, file);
+        if (bytes_read != chunk_size) {
+            if (feof(file)) {
+                set_error("Unexpected EOF: requested " + std::to_string(chunk_size) + 
+                         " bytes, got " + std::to_string(bytes_read));
+            } else if (ferror(file)) {
+                set_error("File read error at offset " + std::to_string(file_offset));
+            } else {
+                set_error("Partial read: requested " + std::to_string(chunk_size) + 
+                         " bytes, got " + std::to_string(bytes_read));
+            }
+            return false;
+        }
+        return true;
     }
-
-    return true;
 }
 
 bool GGUFReader::is_quantized_tensor(size_t tensor_index) const {
@@ -282,11 +360,54 @@ bool GGUFReader::read_string(std::string& str) {
 }
 
 bool GGUFReader::read_value(uint32_t type, std::vector<uint8_t>& value) {
-    size_t size = get_type_size(type);
-    if (size == 0) return false;
+    switch (type) {
+        case GGUF_TYPE_STRING: {
+            std::string str;
+            if (!read_string(str)) return false;
+            value.resize(str.size());
+            if (!str.empty()) {
+                memcpy(value.data(), str.data(), str.size());
+            }
+            return true;
+        }
+        
+        case GGUF_TYPE_ARRAY: {
+            // Read array type
+            uint32_t array_type;
+            if (fread(&array_type, sizeof(uint32_t), 1, file) != 1) return false;
+            
+            // Read array length
+            uint64_t array_length;
+            if (fread(&array_length, sizeof(uint64_t), 1, file) != 1) return false;
+            
+            // Skip array data for now (just seek past it)
+            if (array_type == GGUF_TYPE_STRING) {
+                // Array of strings - need to skip each string
+                for (uint64_t i = 0; i < array_length; i++) {
+                    std::string temp_str;
+                    if (!read_string(temp_str)) return false;
+                }
+            } else {
+                // Array of fixed-size types
+                size_t element_size = get_type_size(array_type);
+                if (element_size == 0) return false;
+                if (fseek(file, array_length * element_size, SEEK_CUR) != 0) return false;
+            }
+            
+            // For now, just store empty value for arrays
+            value.clear();
+            return true;
+        }
+        
+        default: {
+            // Fixed-size types
+            size_t size = get_type_size(type);
+            if (size == 0) return false;
 
-    value.resize(size);
-    return fread(value.data(), 1, size, file) == size;
+            value.resize(size);
+            return fread(value.data(), 1, size, file) == size;
+        }
+    }
 }
 
 size_t GGUFReader::get_type_size(uint32_t type) const {
